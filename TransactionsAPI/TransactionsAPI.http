@@ -1,6 +1,28 @@
 @TransactionsAPI_HostAddress = http://localhost:5087
 
-GET {{TransactionsAPI_HostAddress}}/weatherforecast/
-Accept: application/json
+### Crear cuenta
+POST {{TransactionsAPI_HostAddress}}/accounts
+Content-Type: application/json
 
-###
+{"accountId": "123"}
+
+### Depositar
+POST {{TransactionsAPI_HostAddress}}/accounts/123/deposit
+Content-Type: application/json
+
+{"amount": 1000}
+
+### Depositar
+POST {{TransactionsAPI_HostAddress}}/accounts/123/deposit
+Content-Type: application/json
+
+{"amount": 500}
+
+### Retirar
+POST {{TransactionsAPI_HostAddress}}/accounts/123/withdraw
+Content-Type: application/json
+
+{"amount": 200}
+
+### Consultar balance
+GET {{TransactionsAPI_HostAddress}}/accounts/123/balance
