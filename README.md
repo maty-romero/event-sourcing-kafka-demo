@@ -1,9 +1,16 @@
 # Event-Driven Banking con Apache Kafka
 
-Investigación aplicada de **Apache Kafka** en Sistemas Distribuidos, usando como caso de uso un
+> **Implementacion actual: V1.** Esta version usa Kafka como log de eventos.
+> Sus limitaciones conocidas estan documentadas en
+> [`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md) (con un script
+> para reproducirlas), y la siguiente iteracion — **V2**, con EventStoreDB
+> como event store y Kafka como plataforma de distribucion — esta
+> especificada en [`.docs/propuesta_v2.md`](./.docs/propuesta_v2.md).
+
+Investigacion aplicada de **Apache Kafka** en Sistemas Distribuidos, usando como caso de uso un
 sistema bancario simplificado inspirado en Event Sourcing / CQRS.
 
-Foco de investigación: **80% Apache Kafka / 20% Event Sourcing**. Informe completo en
+Foco de investigacion: **80% Apache Kafka / 20% Event Sourcing**. Informe completo en
 [`/docs/informe.pdf`](./docs/informe.pdf).
 
 ## Arquitectura
@@ -39,26 +46,36 @@ Foco de investigación: **80% Apache Kafka / 20% Event Sourcing**. Informe compl
 - **Balance Projection**: consume eventos y reconstruye el balance (read model en SQLite).
 
 > Kafka se usa como backbone de eventos (EDA/CQRS con consistencia eventual), no como Event
-> Store transaccional estricto. Detalle y alternativa (EventStoreDB) en la sección de
-> Limitaciones del informe.
+> Store transaccional estricto. Las consecuencias de esto y la propuesta de usar EventStoreDB
+> como event store estan analizadas en [`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md)
+> y [`.docs/propuesta_v2.md`](./.docs/propuesta_v2.md).
 
-## Requisitos
+---
+
+## Requisitos ejecucion
 
 - Docker + Docker Compose
 - `curl`
 - `jq` (los scripts de demo lo usan para parsear el JSON)
 
-## Cómo correrlo
+## Como correrlo
 
 ```bash
 git clone <URL_DEL_REPO>
 cd <nombre-del-repo>
 docker compose up -d --build
-./scripts/demo.sh          # corre el flujo y muestra el balance inicial
-./scripts/replay.sh        # borra la proyección, resetea el offset y la reconstruye
+./scripts/demo.sh               # corre el flujo y muestra el balance inicial
+./scripts/replay.sh             # borra la proyeccion, resetea el offset y la reconstruye
+./scripts/show_limitations.sh   # demuestra las limitaciones de la V1 (doble gasto,
+                                # estado perdido tras restart, redelivery sin idempotencia)
 ```
 
-Transaction API queda expuesta en `http://localhost:5087`. Kafka UI en `http://localhost:8080`.
+Cada script es independiente de los demas (los podes correr en cualquier orden).
+Detalle de las limitaciones en
+[`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md) y propuesta de V2
+(EventStoreDB + Kafka) en [`.docs/propuesta_v2.md`](./.docs/propuesta_v2.md).
+
+La Transaction API queda expuesta en `http://localhost:5087`. Kafka UI en `http://localhost:8080`.
 
 ## Uso manual
 
@@ -76,26 +93,26 @@ curl localhost:5087/accounts/123/balance
 
 ## Demo de replay
 
-Escenario central del proyecto: demuestra que el balance es completamente reconstruible desde
-el log de eventos.
+El escenario central del proyecto: demuestra que el balance se puede reconstruir completo
+desde el log de eventos.
 
 ```bash
 ./scripts/demo.sh          # corre el flujo completo y muestra el balance inicial
-./scripts/replay.sh        # borra la proyección, resetea el offset y la reconstruye
+./scripts/replay.sh        # borra la proyeccion, resetea el offset y la reconstruye
 ```
 
-El balance reconstruido debe coincidir exactamente con el original. El script `replay.sh`:
+El balance reconstruido tiene que coincidir exacto con el original. El script `replay.sh`:
 1. Lee el balance actual.
 2. Detiene solo el consumer (deja Kafka y la API vivos).
-3. Borra `./data/data.db*` (la proyección).
+3. Borra `./data/data.db*` (la proyeccion).
 4. Re-arranca el consumer con un `KAFKA_GROUP` nuevo y `KAFKA_START_OFFSET=first` para
    reprocesar el topic desde el primer evento.
 5. Hace polling hasta que el `GET /balance` vuelve a 1300.
-6. Imprime los últimos 30 logs del consumer.
+6. Imprime los ultimos 30 logs del consumer.
 
 ## Endpoints
 
-| Método | Ruta | Evento |
+| Metodo | Ruta | Evento |
 |---|---|---|
 | POST | `/accounts` | `AccountCreated` |
 | POST | `/accounts/{id}/deposit` | `MoneyDeposited` |
@@ -112,9 +129,21 @@ docker compose logs -f transactions-api              # solo la API
 
 ## Limitaciones
 
-Sin control de concurrencia optimista (OCC): operaciones concurrentes sobre la misma cuenta
+- Sin control de concurrencia optimista (OCC): operaciones concurrentes sobre la misma cuenta
 pueden generar inconsistencias. Es intencional — analizado en el informe como evidencia de los
-límites de Kafka como Event Store estricto.
+limites de Kafka como Event Store estricto.
+
+Analisis completo de esta y otras limitaciones (consistencia de estado, falta de agregados,
+proyeccion unica), con ejemplos y un script para reproducirlas
+(`./scripts/show_limitations.sh`): [`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md).
+
+## Versiones y transicion V1 → V2
+
+- **V1 (esta implementacion)**: Kafka como backbone de eventos, sin OCC ni agregados.
+  El codigo de la V1 se preserva en un branch del repo como registro de la transicion.
+- **V2 (proxima iteracion)**: EventStoreDB como event store (streams por agregado,
+  concurrencia optimista, agregado `Account`) + Kafka como plataforma de distribucion
+  para las proyecciones. Diseño completo en [`.docs/propuesta_v2.md`](./.docs/propuesta_v2.md).
 
 ## Apagar
 
