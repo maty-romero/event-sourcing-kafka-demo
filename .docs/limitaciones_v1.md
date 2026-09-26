@@ -53,6 +53,47 @@ este evento solo si el stream esta en la version N".
 `ProjectionService/consumer/consumer.go:96-99` (el evento que falla se loguea
 y se descarta).
 
+### ¿Y si "preguntamos" antes de publicar? (por que esto es de arquitectura, no de codigo)
+
+La objecion natural: *"basta con que la API lea el balance antes de aceptar el
+retiro y lo rechace si no alcanza"*. Suena obvio, y sin embargo no resuelve el
+problema. Tres razones, en orden de maldad:
+
+**1. Preguntar y publicar son dos pasos separados.** Los 5 clientes preguntan
+a la vez, los 5 leen "balance 100", los 5 se convencen de que pueden retirar y
+los 5 publican. Nadie dijo "alto, alguien acaba de retirar". Para cerrar esa
+ventana hace falta que la *escritura misma* sea condicional: "grabate este
+evento **solo si** el stream sigue en la version que yo lei". Eso lo decide el
+almacen de datos en el momento del append, y Kafka no ofrece ese "solo si" —
+no importa cuantas preguntas le agregues arriba. El hueco no esta en nuestro
+codigo: esta en la API del storage. Por eso la limitacion es de arquitectura.
+
+**2. La proyeccion siempre contesta con datos viejos.** Aunque no haya
+concurrencia: publicas un retiro, la proyeccion tarda unos milisegundos en
+consumirlo, llega el segundo retiro, pregunta, y le dicen "100" cuando el log
+ya decia "0". Un espejo que se actualiza tarde no puede ser el juez de una
+regla de negocio.
+
+**3. Y aunque la API lea el log de eventos directamente** (en vez de la
+proyeccion), la carrera sigue: dos lectores ven la misma version, los dos
+validan OK, los dos appendean. Sin el "solo si" del punto 1, la validacion es
+decorativa.
+
+**La prueba empirica**: el API ya tiene inyectado un lector de balance
+(`Program.cs:11`, un `IBalanceReader` que lee el SQLite de la proyeccion) y
+ningun comando lo usa. Si lo usaras para rechazar cuando no hay saldo y corres
+los 5 retiros paralelos del script, **los 5 pasan el chequeo igual** (los 5
+leen 100 antes de que la proyeccion aplique el primero) y el doble gasto
+ocurre igual. Que el problema sobreviva al "parche obvio" es justamente la
+señal de que no es un bug de implementacion.
+
+**El unico parche que funcionaria sobre Kafka** confirma que es arquitectura:
+hacer que *un solo* consumidor reciba todos los comandos de una cuenta, los
+procese de a uno (validando contra el estado que el mismo lleva), y publique
+los eventos. Eso funciona porque elimina la concurrencia en vez de controlarla
+— y en el fondo estas reconstruyendo a mano las reglas de un event store
+encima de Kafka, con mas piezas y sin ganar la version esperada.
+
 ---
 
 ## 2. Consistencia de estado
@@ -216,6 +257,11 @@ idempotente (2b) y descarte de eventos (2c).
 - **Expected version / expected revision**: el numero de version que esperas
   que tenga el stream al momento de appendear. Es el mecanismo que hace
   posible el OCC en event stores.
+- **Append condicional**: escribir un evento con una condicion de version
+  ("grabalo solo si el stream esta en la version N"); si la condicion no se
+  cumple, el almacen rechaza la escritura de forma atomica. Es lo que
+  transforma una validacion "decorativa" (preguntar antes) en una garantia
+  real. Kafka no lo ofrece; EventStoreDB si.
 - **Proyeccion / read model**: vista derivada de los eventos, optimizada para
   leer (ej. la tabla de balances). Se puede borrar y reconstruir.
 - **Idempotencia**: procesar el mismo evento 2 veces da el mismo resultado
