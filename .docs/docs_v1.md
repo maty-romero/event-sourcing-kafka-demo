@@ -1,4 +1,4 @@
-# Iteracion V1
+# Iteracion V1 
 
 Guia breve de la version actual. Las fallas en detalle:
 [limitaciones_v1.md](./limitaciones_v1.md). El diseno correctivo (V2):
