@@ -2,6 +2,7 @@
 set -euo pipefail
 
 API="${API:-http://localhost:5087}"
+PROJ="${PROJ:-http://localhost:8090}"
 ACCOUNT="${ACCOUNT:-123}"
 
 post() {
@@ -12,7 +13,7 @@ post() {
 }
 
 get_balance() {
-  curl -fsS "$API/accounts/$ACCOUNT/balance" | jq -r .balance
+  curl -fsS "$PROJ/accounts/$ACCOUNT/balance" | jq -r .balance
 }
 
 poll_balance() {
@@ -31,9 +32,10 @@ poll_balance() {
 
 echo "=== 0) reiniciar transactions-api (limpia lista en memoria) ==="
 docker compose restart transactions-api
-# esperar a que la API esté lista (el restart pierde ~1-2s)
+# esperar a que la API responda cualquier HTTP (el restart pierde ~1-2s)
 for i in $(seq 1 20); do
-  curl -fsS "$API/accounts/$ACCOUNT/balance" >/dev/null 2>&1 && break
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$API/accounts" || true)
+  [[ -n "$code" && "$code" != "000" ]] && break
   sleep 0.5
 done
 

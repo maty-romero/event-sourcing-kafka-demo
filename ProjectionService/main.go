@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"event_projection/api"
 	"event_projection/consumer"
 	"event_projection/domain"
 	"event_projection/store"
@@ -51,9 +52,33 @@ func main() {
 		return store.SaveBalance(ctx, db, event.AccountID, newBalance)
 	}
 
-	if err := consumer.Run(ctx, reader, handle); err != nil {
-		log.Fatalf("consumer terminó con error: %v", err)
+	consumerDone := make(chan error, 1)
+	go func() {
+		consumerDone <- consumer.Run(ctx, reader, handle)
+	}()
+
+	httpDone := make(chan error, 1)
+	go func() {
+		httpDone <- api.Run(ctx, getenv("HTTP_ADDR", ":8090"), db)
+	}()
+
+	fatal := func(err error, msg string) {
+		if err != nil {
+			stop()
+			log.Fatalf("%s: %v", msg, err)
+		}
 	}
+
+	// La caida de cualquiera de los dos procesos tira al otro.
+	select {
+	case err := <-consumerDone:
+		fatal(err, "consumer terminó con error")
+		<-httpDone
+	case err := <-httpDone:
+		fatal(err, "HTTP de lecturas terminó con error")
+		<-consumerDone
+	}
+	stop()
 }
 
 func getenv(key, def string) string {

@@ -41,11 +41,8 @@ services:
       Kafka__BootstrapServers: "kafka:9092"
       Kafka__Topic: "account-events"
       ASPNETCORE_URLS: "http://+:5087"
-      DB_PATH: "/data/data.db"
     ports:
       - "5087:5087"
-    volumes:
-      - ./data:/data
     restart: unless-stopped
 
   projection:
@@ -59,9 +56,14 @@ services:
     environment:
       KAFKA_BROKERS: "kafka:9092"
       KAFKA_TOPIC: "account-events"
-      KAFKA_GROUP: "balance-projection-group"
-      KAFKA_START_OFFSET: "first"
+      # interpolables para que scripts/replay.sh pueda levantar un grupo nuevo
+      # desde el offset 0 sin tocar el compose
+      KAFKA_GROUP: "${KAFKA_GROUP:-balance-projection-group}"
+      KAFKA_START_OFFSET: "${KAFKA_START_OFFSET:-first}"
+      HTTP_ADDR: ":8090"
       DB_PATH: "/data/data.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+    ports:
+      - "8090:8090"
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -72,9 +74,10 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
       DYNAMIC_CONFIG_ENABLED: "true"
 
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRERSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092

@@ -10,10 +10,18 @@ set -euo pipefail
 # read model. Al final deja el sistema en estado LIMPIO (como instalacion
 # fresca): borra topic y read model, y reinicia la API.
 #
+# Las lecturas de balance van siempre al ProjectionService (:8090), que es el
+# dueno del read model; la API (:5087) solo recibe comandos.
+#
+# Cada demo clasifica su limitacion: la 1 es de ARQUITECTURA (irremediable con
+# Kafka); las 2 y 3 son implementables con Kafka pero pagando el costo de
+# reconstruir a mano lo que un event store da nativo.
+#
 # Uso: ./scripts/show_limitations.sh
 # ============================================================================
 
 API="${API:-http://localhost:5087}"
+PROJ="${PROJ:-http://localhost:8090}"
 
 ACC_OCC="901"      # demo 1: concurrencia / doble gasto
 ACC_AMNESIA="902"  # demo 2: estado perdido tras restart
@@ -31,8 +39,8 @@ post_status() { # path body -> HTTP code
     -H 'Content-Type: application/json' -d "$2"
 }
 
-get_balance() { # account -> balance | ""
-  curl -fsS "$API/accounts/$1/balance" 2>/dev/null | jq -r .balance 2>/dev/null || echo ""
+get_balance() { # account -> balance | "" (leido al ProjectionService, dueno del read model)
+  curl -fsS "$PROJ/accounts/$1/balance" 2>/dev/null | jq -r .balance 2>/dev/null || echo ""
 }
 
 poll_balance() { # account expected
@@ -49,7 +57,7 @@ poll_balance() { # account expected
 wait_api() {
   local i code
   for i in $(seq 1 40); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' "$API/accounts/ping/balance" || true)
+    code=$(curl -s -o /dev/null -w '%{http_code}' "$API/accounts" || true)
     [[ -n "$code" && "$code" != "000" ]] && return 0
     sleep 0.5
   done
@@ -91,12 +99,11 @@ rm -f "$tmp"
 
 poll_balance "$ACC_OCC" 0
 n=$(count_events "$ACC_OCC" MoneyWithdrawn)
-info "eventos MoneyWithdrawn en el log de Kafka para la cuenta $ACC_OCC: $n"
-info "el log registra $n retiros, pero el balance solo refleja 1 aplicado"
-info "errores 'balance insuficiente' en la proyeccion (eventos descartados en silencio):"
+info "eventos MoneyWithdrawn en el log: $n | aplicados en el read model: 1"
+info "la proyeccion descarta en silencio ('balance insuficiente' en su log):"
 docker compose logs projection 2>&1 | grep "balance insuficiente" | tail -4 | sed 's/^/    /' || true
-bad "LIMITACIÓN 1: sin expected version, comandos concurrentes se aceptan todos;"
-bad "la proyeccion decide despues cuales descarta. Log ≠ read model."
+bad "LIMITACIÓN (nivel 1, arquitectura): sin append condicional ni expected version"
+bad "nadie puede rechazar el segundo append, así que 'preguntar antes' no cierra la carrera."
 
 # ----------------------------------------------------------------------------
 say "Demo 2 — El estado del lado de comandos se pierde al reiniciar"
@@ -114,9 +121,10 @@ code=$(post_status "/accounts/$ACC_AMNESIA/deposit" '{"amount":10}')
 info "POST deposit a la cuenta $ACC_AMNESIA tras el restart → HTTP $code"
 bal=$(get_balance "$ACC_AMNESIA")
 n=$(count_events "$ACC_AMNESIA" AccountCreated)
-info "pero GET balance sigue devolviendo $bal (SQLite) y hay $n evento(s) AccountCreated en Kafka"
-bad "LIMITACIÓN 2: la API guarda las cuentas en una lista en memoria; al reiniciar"
-bad "'olvida' cuentas cuyos eventos siguen en el log. No reconstruye estado desde eventos."
+info "pero el read model (ProjectionService) sigue devolviendo $bal y hay $n evento(s) AccountCreated en Kafka"
+bad "LIMITACIÓN (nivel 2, implementable con Kafka pero con costo): la API guarda las"
+bad "cuentas en memoria y 'olvida' cuentas cuyos eventos siguen en el log. El arreglo"
+bad "(que la API pliegue el log al arrancar) exige reconstruir el store a mano."
 
 # ----------------------------------------------------------------------------
 say "Demo 3 — Proyeccion no idempotente (redelivery)"
@@ -126,8 +134,7 @@ info "cuenta $ACC_IDEMP: se crea y se depositan 500"
 [[ "$(post_status "/accounts/$ACC_IDEMP/deposit" '{"amount":500}')" == "200" ]] || bad "no se pudo depositar"
 poll_balance "$ACC_IDEMP" 500
 
-info "se re-inyecta en Kafka el MISMO evento MoneyDeposited ya aplicado"
-info "(simula lo que pasa con at-least-once si el consumer muere entre procesar y commitear)"
+info "se re-inyecta en Kafka el MISMO evento MoneyDeposited ya aplicado (simula un redelivery de at-least-once)"
 docker compose exec -T kafka /opt/kafka/bin/kafka-console-producer.sh \
   --bootstrap-server localhost:9092 --topic account-events \
   --property parse.key=true --property key.separator='|' >/dev/null <<EOF
@@ -135,10 +142,9 @@ $ACC_IDEMP|{"EventType":"MoneyDeposited","AccountId":"$ACC_IDEMP","Timestamp":"2
 EOF
 poll_balance "$ACC_IDEMP" 1000
 info "el deposito quedo aplicado DOS veces: balance 500 → 1000"
-bad "LIMITACIÓN 3: los eventos no tienen eventId y la proyeccion no guarda"
-bad "checkpoints: cualquier redelivery duplica el estado. (Nota: re-consumir el"
-bad "topic completo NO lo muestra, porque AccountCreated resetea el balance;"
-bad "la redelivery parcial es el caso real, y es lo que se simula aca.)"
+bad "LIMITACIÓN (nivel 2): sin eventId ni checkpoint, cualquier redelivery duplica el"
+bad "estado. El arreglo (dedupe + checkpoint en la misma transaccion) lo pagas vos con"
+bad "Kafka; con un event store viene dado por la posicion del evento."
 
 # ----------------------------------------------------------------------------
 say "Restaurar estado inicial (como instalacion limpia)"
@@ -160,9 +166,7 @@ wait_api
 ok "sistema en estado limpio (topic recreado vacio, read model vacio, API reiniciada)"
 
 say "Resumen"
-info "1. Doble gasto: 5 retiros concurrentes aceptados, solo 1 aplicado (sin OCC)"
-info "2. Amnesia: tras reiniciar, la API desconoce cuentas que existen en el log"
-info "3. No idempotencia: un evento re-entregado se aplica dos veces (sin eventId/checkpoints)"
-info ""
-info "Detalle:      .docs/limitaciones_v1.md"
-info "Propuesta V2: .docs/propuesta_v2.md"
+info "1. Doble gasto (nivel 1, arquitectura): 5 retiros aceptados, 1 aplicado"
+info "2. Amnesia (nivel 2): tras reiniciar, la API desconoce cuentas que estan en el log"
+info "3. No idempotencia (nivel 2): un evento re-entregado se aplica dos veces"
+info "Detalle: .docs/limitaciones_v1.md · Propuesta V2: .docs/propuesta_v2.md"

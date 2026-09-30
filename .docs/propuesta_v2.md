@@ -19,13 +19,18 @@ script de reproduccion en [limitaciones_v1.md](./limitaciones_v1.md)):
 2. Estado inconsistente: registro de cuentas en memoria, proyeccion no
    idempotente, eventos descartados en silencio.
 3. Sin agregados: las reglas de negocio se validan "despues", en la proyeccion.
-4. Una sola proyeccion, sin checkpoints.
+4. Proyeccion sin checkpoints junto al read model y sin suscripcion
+   catch-up+live (sumar proyecciones, en cambio, es trivial en Kafka:
+   otro consumer group — eso es fortaleza, no limitacion).
 5. Kafka usado como event store, rol para el que no esta diseñado.
 
-**Conclusion de la V1:** estas limitaciones no son bugs que se arreglan
-con parches, sino consecuencias de la arquitectura: para hacer event sourcing
-en serio hace falta un event store de verdad (streams por agregado, append
-condicional, subscriptions). De ahi sale esta propuesta.
+**Conclusion de la V1:** algunas limitaciones se podrian parchear sobre Kafka
+(idempotencia, reconstruir el estado del lado de comandos), pero cada parche
+consiste en reconstruir a mano lo que un event store da nativo — y las
+estructurales (append condicional, streams por agregado) no tienen parche
+posible. No son bugs de implementacion: son consecuencias del storage. De ahi
+sale esta propuesta: para hacer event sourcing en serio hace falta un event
+store de verdad (streams por agregado, append condicional, subscriptions).
 
 ## Objetivo
 

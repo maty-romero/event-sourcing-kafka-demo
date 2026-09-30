@@ -10,40 +10,46 @@
 Investigacion aplicada de **Apache Kafka** en Sistemas Distribuidos, usando como caso de uso un
 sistema bancario simplificado inspirado en Event Sourcing / CQRS.
 
-Foco de investigacion: **80% Apache Kafka / 20% Event Sourcing**. Informe completo en
-[`/docs/informe.pdf`](./docs/informe.pdf).
+## Los dos propositos de la V1
+
+Esta V1 es un experimento con dos hipotesis:
+
+1. **Kafka como log distribuido**: ¿hace Kafka lo que dice hacer? Se prueba en
+   `scripts/demo.sh` y `scripts/replay.sh` (orden por clave, consumer groups,
+   replay del log para reconstruir estado). Resultado: **si**.
+2. **Kafka como event store**: ¿que pasa si lo obligas a ser la fuente de
+   verdad de un sistema inspirado en event sourcing? Se prueba en
+   `scripts/show_limitations.sh`. Resultado: **falla en puntos especificos**,
+   y cada falla esta clasificada por nivel (arquitectura / posible-pero-con-
+   costo / scaffolding) en [`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md).
 
 ## Arquitectura
 
 ```
-                 ┌────────────────────┐
-                 │  Transaction API   │   (Command side)
-                 │       (.NET)       │
-                 └──────────┬─────────┘
-                            │ produce eventos
-                            ▼
-                 ┌──────────────────────────┐
-                 │  Kafka: account-events    │
-                 │  (particionado por        │
-                 │   accountId)              │
-                 └───────────┬──────────────┘
-                             │ consume eventos
-                             ▼
-                 ┌──────────────────────────┐
-                 │  Balance Projection       │   (Query side)
-                 │       (Go)                │
-                 └───────────┬──────────────┘
-                             │ persiste
-                             ▼
-                 ┌──────────────────────────┐
-                 │  Account State            │
-                 │  (read model - SQLite)    │
-                 └──────────────────────────┘
+   comandos HTTP (5087)                    lecturas HTTP (8090)
+        │                                        │
+        ▼                                        ▼
+┌────────────────┐  produce   ┌──────────────┐   consume  ┌──────────────────┐
+│ Transaction API│ ─────────▶ │    Kafka     │ ─────────▶ │ Balance Projection│
+│     (.NET)     │  eventos   │account-events│            │       (Go)        │
+│ (Command side) │            │(orden por    │            │   (Query side)    │
+└────────────────┘            │ accountId)   │            └─────────┬─────────┘
+                              └──────────────┘                      │ persiste
+                                                                    ▼
+                                                         ┌──────────────────┐
+                                                         │  Account State    │
+                                                         │ (read model,      │
+                                                         │  SQLite - unico   │
+                                                         │  dueno: la        │
+                                                         │  proyeccion)      │
+                                                         └──────────────────┘
 ```
 
-- **Transaction API**: recibe comandos HTTP y produce eventos. No calcula balances.
+- **Transaction API** (puerto 5087): recibe comandos HTTP y produce eventos. No calcula balances
+  y no lee el read model: es solo el lado de escritura.
 - **Kafka**: log de eventos, particionado por `accountId` (garantiza orden por cuenta).
-- **Balance Projection**: consume eventos y reconstruye el balance (read model en SQLite).
+- **Balance Projection** (puerto 8090): consume eventos, reconstruye el balance (read model en
+  SQLite del que es unica duena) y **sirve las lecturas por HTTP** (`GET /accounts/{id}/balance`).
 
 > Kafka se usa como backbone de eventos (EDA/CQRS con consistencia eventual), no como Event
 > Store transaccional estricto. Las consecuencias de esto y la propuesta de usar EventStoreDB
@@ -75,7 +81,8 @@ Detalle de las limitaciones en
 [`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md) y propuesta de V2
 (EventStoreDB + Kafka) en [`.docs/propuesta_v2.md`](./.docs/propuesta_v2.md).
 
-La Transaction API queda expuesta en `http://localhost:5087`. Kafka UI en `http://localhost:8080`.
+La Transaction API (comandos) queda expuesta en `http://localhost:5087`, la Projection (lecturas)
+en `http://localhost:8090`. Kafka UI en `http://localhost:8080`.
 
 ## Uso manual
 
@@ -87,8 +94,8 @@ curl -X POST localhost:5087/accounts -d '{"accountId": "123"}'
 curl -X POST localhost:5087/accounts/123/deposit -d '{"amount": 1000}'
 curl -X POST localhost:5087/accounts/123/withdraw -d '{"amount": 200}'
 
-# Consultar balance
-curl localhost:5087/accounts/123/balance
+# Consultar balance (lo sirve la proyeccion, no la API de comandos)
+curl localhost:8090/accounts/123/balance
 ```
 
 ## Demo de replay
@@ -107,17 +114,25 @@ El balance reconstruido tiene que coincidir exacto con el original. El script `r
 3. Borra `./data/data.db*` (la proyeccion).
 4. Re-arranca el consumer con un `KAFKA_GROUP` nuevo y `KAFKA_START_OFFSET=first` para
    reprocesar el topic desde el primer evento.
-5. Hace polling hasta que el `GET /balance` vuelve a 1300.
+5. Hace polling hasta que el `GET /balance` de la proyeccion (:8090) vuelve a 1300.
 6. Imprime los ultimos 30 logs del consumer.
 
 ## Endpoints
+
+Transaction API (comandos, `:5087`):
 
 | Metodo | Ruta | Evento |
 |---|---|---|
 | POST | `/accounts` | `AccountCreated` |
 | POST | `/accounts/{id}/deposit` | `MoneyDeposited` |
 | POST | `/accounts/{id}/withdraw` | `MoneyWithdrawn` |
-| GET | `/accounts/{id}/balance` | — |
+
+Balance Projection (lecturas, `:8090`):
+
+| Metodo | Ruta | Devuelve |
+|---|---|---|
+| GET | `/accounts/{id}/balance` | balance desde el read model |
+| GET | `/healthz` | `ok` |
 
 ## Logs en vivo
 
@@ -133,9 +148,11 @@ docker compose logs -f transactions-api              # solo la API
 pueden generar inconsistencias. Es intencional — analizado en el informe como evidencia de los
 limites de Kafka como Event Store estricto.
 
-Analisis completo de esta y otras limitaciones (consistencia de estado, falta de agregados,
-proyeccion unica), con ejemplos y un script para reproducirlas
-(`./scripts/show_limitations.sh`): [`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md).
+Analisis completo de esta y otras limitaciones (consistencia de estado, falta de agregados),
+**clasificadas por nivel de evidencia** (arquitectura / posible-pero-con-costo / scaffolding),
+con ejemplos y un script para reproducirlas (`./scripts/show_limitations.sh`):
+[`.docs/limitaciones_v1.md`](./.docs/limitaciones_v1.md). Tambien incluye lo que Kafka **si**
+hace bien (replay, fan-out): la otra mitad del experimento.
 
 ## Versiones y transicion V1 → V2
 

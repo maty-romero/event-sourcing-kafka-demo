@@ -36,6 +36,24 @@ func GetBalance(ctx context.Context, db *sql.DB, accountID string) (int, error) 
 	return balance, err
 }
 
+// LookupBalance distingue "no existe" de "existe con balance 0",
+// algo que GetBalance (uso del consumer) no necesita.
+func LookupBalance(ctx context.Context, db *sql.DB, accountID string) (int, bool, error) {
+	var balance int
+	err := db.QueryRowContext(ctx,
+		`SELECT balance FROM account_balances WHERE account_id = ?`, accountID,
+	).Scan(&balance)
+
+	switch {
+	case err == sql.ErrNoRows:
+		return 0, false, nil
+	case err != nil:
+		return 0, false, err
+	default:
+		return balance, true, nil
+	}
+}
+
 func SaveBalance(ctx context.Context, db *sql.DB, accountID string, balance int) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO account_balances (account_id, balance)

@@ -8,7 +8,6 @@ builder.Services.AddOpenApi();
 builder.Services.Configure<KafkaOptions>(
     builder.Configuration.GetSection(KafkaOptions.SectionName));
 builder.Services.AddSingleton<IPublisher, KafkaPublisher>();
-builder.Services.AddSingleton<IBalanceReader, SqliteBalanceReader>();
 
 var app = builder.Build();
 
@@ -74,15 +73,6 @@ app.MapPost("/accounts/{id}/withdraw",
     return Results.Ok();
 })
 .WithName("WithdrawAmount");
-
-app.MapGet("/accounts/{id}/balance", (string id, IBalanceReader reader) =>
-{
-    var balance = reader.GetBalance(id);
-    return balance is null
-        ? Results.NotFound($"Account {id} not found")
-        : Results.Ok(new { accountId = id, balance });
-})
-.WithName("GetBalance");
 
 app.Run();
 

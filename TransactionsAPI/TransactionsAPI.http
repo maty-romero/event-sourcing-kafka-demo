@@ -1,4 +1,5 @@
 @TransactionsAPI_HostAddress = http://localhost:5087
+@Projection_HostAddress = http://localhost:8090
 
 ### Crear cuenta
 POST {{TransactionsAPI_HostAddress}}/accounts

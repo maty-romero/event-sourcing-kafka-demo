@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="${API:-http://localhost:5087}"
+PROJ="${PROJ:-http://localhost:8090}"
 ACCOUNT="${ACCOUNT:-123}"
 DATA_DIR="${DATA_DIR:-./data}"
 
-echo "=== 1) balance ANTES de borrar ==="
-curl -fsS "$API/accounts/$ACCOUNT/balance"; echo
+echo "=== 1) balance ANTES de borrar (leido al ProjectionService) ==="
+curl -fsS "$PROJ/accounts/$ACCOUNT/balance"; echo
 
 echo "=== 2) detener consumer ==="
 docker compose stop projection
@@ -24,7 +24,7 @@ echo "=== 5) esperar a que reconstruya ==="
 expected=1300
 got=""
 for i in $(seq 1 20); do
-  got=$(curl -fsS "$API/accounts/$ACCOUNT/balance" 2>/dev/null | jq -r .balance 2>/dev/null || echo "")
+    got=$(curl -fsS "$PROJ/accounts/$ACCOUNT/balance" 2>/dev/null | jq -r .balance 2>/dev/null || echo "")
   if [[ "$got" == "$expected" ]]; then
     echo "  balance reconstruido = $got ✓ (intento $i)"
     break
