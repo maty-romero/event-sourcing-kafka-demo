@@ -1,5 +1,13 @@
 # Guía de Implementación — Balance Projection (Go)
 
+> **Nota histórica (V1).** Esta guia describe las decisiones del consumer Go
+> cuando Kafka era el event store (V1, branch `kafka-initial-v1`). En la V2 el
+> codigo evoluciona: envelope con identidad, checkpoint en la misma
+> transaccion, DLQ y una segunda proyeccion — ver
+> [`.docs/docs_v2.md`](../.docs/docs_v2.md). Lo que sigue vigente: la eleccion
+> de `segmentio/kafka-go`, el patron at-least-once con commit manual y el
+> manejo de topics/particiones.
+
 Referencia rápida para encarar el consumer de Kafka en Go. No es código completo, son
 lineamientos + snippets para no arrancar en blanco.
 

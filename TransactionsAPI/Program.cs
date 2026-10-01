@@ -1,13 +1,16 @@
-using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 
-builder.Services.Configure<KafkaOptions>(
-    builder.Configuration.GetSection(KafkaOptions.SectionName));
-builder.Services.AddSingleton<IPublisher, KafkaPublisher>();
+builder.Services.Configure<EventStoreOptions>(
+    builder.Configuration.GetSection(EventStoreOptions.SectionName));
+builder.Services.AddHttpClient<EventStoreHttp>();
+builder.Services.AddTransient<IEventStore>(sp =>
+    sp.GetRequiredService<EventStoreHttp>());
+builder.Services.AddTransient<AccountStore>();
 
 var app = builder.Build();
 
@@ -16,65 +19,79 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-List<string> accounts = new()
+// Una cuenta existe si su stream existe en EventStoreDB: no hay registro en
+// memoria y los restarts no pierden nada (limitacion 2a de la V1).
+var accountIdPattern = new Regex("^[A-Za-z0-9_-]+$", RegexOptions.Compiled);
+
+app.MapPost("/accounts", async (CreateAccountRequest request, AccountStore store) =>
 {
-    "111", "222"
-};
+    string id = request.AccountId?.Trim() ?? "";
+    if (!accountIdPattern.IsMatch(id))
+        return Results.BadRequest("AccountId must be non-empty and use only letters, digits, '_' or '-'");
 
-app.MapPost("/accounts", async (CreateAccountRequest request, IPublisher publisher) =>
-{
-    string id = request.AccountId;
-    if (id.Length == 0 || string.IsNullOrWhiteSpace(id))
-        return Results.BadRequest("AccountId must not be empty and have format YYY");
-
-    bool alreadyExist = accounts.Any(x => x.Equals(request.AccountId));
-
-    if (alreadyExist)
-        return Results.BadRequest($"Account {request.AccountId} already exists");
-
-    accounts.Add(id);
-
-    await publisher.Publish("AccountCreated", request.AccountId, null);
+    try
+    {
+        await store.CreateAsync(id, CancellationToken.None);
+    }
+    catch (AccountAlreadyExistsException ex)
+    {
+        return Results.Conflict(ex.Message);
+    }
 
     return Results.Created();
 })
 .WithName("CreateAccount");
 
 app.MapPost("/accounts/{id}/deposit",
-    async (string id, DepositRequest request, IPublisher publisher) =>
+    async (string id, DepositRequest request, AccountStore store) =>
 {
-    bool exists = accounts.Any(x => x.Equals(id));
-    if (!exists)
-        return Results.NotFound($"Account {id} not found");
+    if (!accountIdPattern.IsMatch(id))
+        return Results.BadRequest("Invalid account id");
 
-    var amount = request.Amount;
-    if (amount <= 0)
-        return Results.BadRequest("Amount must be greater than zero");
-
-    await publisher.Publish("MoneyDeposited", id, amount);
-
-    return Results.Ok();
+    return await ExecuteAsync(
+        store.DepositAsync(id, request.Amount, CancellationToken.None), id);
 })
 .WithName("DepositAmount");
 
 app.MapPost("/accounts/{id}/withdraw",
-    async (string id, WithdrawRequest request, IPublisher publisher) =>
+    async (string id, WithdrawRequest request, AccountStore store) =>
 {
-    bool exists = accounts.Any(x => x.Equals(id));
-    if (!exists)
-        return Results.NotFound($"Account {id} not found");
+    if (!accountIdPattern.IsMatch(id))
+        return Results.BadRequest("Invalid account id");
 
-    var amount = request.Amount;
-    if (amount <= 0)
-        return Results.BadRequest("Amount must be greater than zero");
-
-    await publisher.Publish("MoneyWithdrawn", id, amount);
-
-    return Results.Ok();
+    return await ExecuteAsync(
+        store.WithdrawAsync(id, request.Amount, CancellationToken.None), id);
 })
 .WithName("WithdrawAmount");
 
 app.Run();
+
+static async Task<IResult> ExecuteAsync(Task<(int Balance, long Revision)> command, string id)
+{
+    try
+    {
+        var (balance, revision) = await command;
+        return Results.Ok(new { accountId = id, balance, revision });
+    }
+    catch (AccountNotFoundException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+    catch (InsufficientFundsException ex)
+    {
+        // El retiro sin saldo se rechaza ANTES de que exista el evento:
+        // respuesta honesta (409) y el read model nunca diverge (limitacion 1 y 2c).
+        return Results.Conflict(ex.Message);
+    }
+    catch (InvalidAmountException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+    catch (ConcurrencyConflictException ex)
+    {
+        return Results.Conflict(ex.Message);
+    }
+}
 
 record CreateAccountRequest
 {

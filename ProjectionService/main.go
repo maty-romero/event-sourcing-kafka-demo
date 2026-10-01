@@ -13,8 +13,6 @@ import (
 	"event_projection/domain"
 	"event_projection/store"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/segmentio/kafka-go"
 )
 
@@ -22,7 +20,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Connect(getenv("DB_PATH", "data.db"))
+	kind := getenv("PROJECTION_KIND", store.KindBalances)
+
+	db, err := store.Connect(getenv("DB_PATH", "data.db"), kind)
 	if err != nil {
 		log.Fatalf("conectar sqlite: %v", err)
 	}
@@ -30,36 +30,50 @@ func main() {
 
 	brokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	topic := getenv("KAFKA_TOPIC", "account-events")
-	groupID := getenv("KAFKA_GROUP", "balance-projection-group")
+	dlqTopic := getenv("KAFKA_DLQ_TOPIC", topic+".dlq")
+	groupID := getenv("KAFKA_GROUP", kind+"-projection-group")
 
 	startOffset := kafka.LastOffset
 	if strings.EqualFold(getenv("KAFKA_START_OFFSET", "last"), "first") {
 		startOffset = kafka.FirstOffset
 	}
 
+	// Asegurar los topics antes de armar el reader: sin topic, el grupo
+	// recibe asignacion vacia.
+	for _, t := range []string{topic, dlqTopic} {
+		if err := consumer.EnsureTopic(brokers[0], t); err != nil {
+			log.Printf("warn: asegurar topic %q: %v", t, err)
+		}
+	}
+
 	reader := consumer.NewReader(brokers, topic, groupID, startOffset)
 	defer reader.Close()
 
+	dlq := consumer.NewDLQ(brokers, dlqTopic)
+	defer dlq.Close()
+
 	handle := func(event domain.Event) error {
-		current, err := store.GetBalance(ctx, db, event.AccountID)
+		applied, err := store.ApplyEvent(ctx, db, kind, event)
 		if err != nil {
 			return err
 		}
-		newBalance, err := domain.Apply(current, event)
-		if err != nil {
-			return err
+		if !applied {
+			log.Printf("evento ya procesado, se ignora: stream=%s rev=%d",
+				event.StreamID, event.Revision)
 		}
-		return store.SaveBalance(ctx, db, event.AccountID, newBalance)
+		return nil
 	}
+
+	log.Printf("proyeccion %q: topic=%s group=%s dlq=%s", kind, topic, groupID, dlqTopic)
 
 	consumerDone := make(chan error, 1)
 	go func() {
-		consumerDone <- consumer.Run(ctx, reader, handle)
+		consumerDone <- consumer.Run(ctx, reader, handle, dlq)
 	}()
 
 	httpDone := make(chan error, 1)
 	go func() {
-		httpDone <- api.Run(ctx, getenv("HTTP_ADDR", ":8090"), db)
+		httpDone <- api.Run(ctx, getenv("HTTP_ADDR", ":8090"), db, kind)
 	}()
 
 	fatal := func(err error, msg string) {

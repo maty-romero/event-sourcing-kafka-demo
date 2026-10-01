@@ -1,13 +1,15 @@
 @TransactionsAPI_HostAddress = http://localhost:5087
-@Projection_HostAddress = http://localhost:8090
+@Balances_HostAddress = http://localhost:8090
+@Statement_HostAddress = http://localhost:8091
+@EventStore_HostAddress = http://localhost:2113
 
-### Crear cuenta
+### Crear cuenta (201; 409 si el stream ya existe)
 POST {{TransactionsAPI_HostAddress}}/accounts
 Content-Type: application/json
 
 {"accountId": "123"}
 
-### Depositar
+### Depositar (200 con balance y revision; 404 si no existe la cuenta)
 POST {{TransactionsAPI_HostAddress}}/accounts/123/deposit
 Content-Type: application/json
 
@@ -19,11 +21,22 @@ Content-Type: application/json
 
 {"amount": 500}
 
-### Retirar
+### Retirar (409 si no hay saldo: el evento invalido nunca nace)
 POST {{TransactionsAPI_HostAddress}}/accounts/123/withdraw
 Content-Type: application/json
 
 {"amount": 200}
 
-### Consultar balance
-GET {{TransactionsAPI_HostAddress}}/accounts/123/balance
+### Consultar balance (lo sirve la proyeccion de balances)
+GET {{Balances_HostAddress}}/accounts/123/balance
+
+### Consultar extracto (segunda proyeccion)
+GET {{Statement_HostAddress}}/accounts/123/movements
+
+### El stream en EventStoreDB (system of record, API HTTP)
+GET {{EventStore_HostAddress}}/streams/account-123/head/1000?embed=content
+Accept: application/vnd.eventstore.events+json
+
+### Posicion del puente ESDB->Kafka
+GET {{EventStore_HostAddress}}/streams/publisher-position/head/1?embed=content
+Accept: application/vnd.eventstore.events+json

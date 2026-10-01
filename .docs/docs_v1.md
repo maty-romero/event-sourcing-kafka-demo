@@ -83,7 +83,12 @@ desacople.
    broker (por eso el log imprime `partition: 0, offset: 1`). Payload real, PascalCase:
 
    ```json
-   {"EventType":"MoneyDeposited","AccountId":"123","Timestamp":"2026-09-26T15:01:22.1234567Z","Amount":1000}
+   {
+    "EventType":"MoneyDeposited",
+   "AccountId":"123",
+   "Timestamp":"2026-09-26T15:01:22.1234567Z",
+   "Amount":1000
+   }
    ```
 
 3. **El consumer lee** el siguiente mensaje no procesado y lo deserializa contra un

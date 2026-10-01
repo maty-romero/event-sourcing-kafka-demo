@@ -1,5 +1,9 @@
 # Propuesta V2 — EventStoreDB como event store + Kafka como plataforma de distribucion
 
+> **Estado: implementada.** La guia de la V2 ya construida (arquitectura,
+> config, contratos, scripts) esta en [docs_v2.md](./docs_v2.md); la
+> verificacion de los criterios de aceptacion es `scripts/show_fixes.sh`.
+>
 > Este documento es el **registro de diseño antes de arrancar la V2**:
 > contexto, motivacion, decisiones de arquitectura y plan de implementacion.
 > La V1 queda preservada como branch en el repo para documentar la
