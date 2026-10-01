@@ -18,6 +18,10 @@ set -euo pipefail
 #   Extra: el evento invalido no se descarta en silencio -> DLQ.
 #
 # Al final deja el sistema en estado limpio (topic + read models + ESDB).
+# Las cuentas usan los mismos IDs de la V1 (901/902/900) para que el espejo
+# sea directo. Atencion: si una corrida se interrumpe a mitad quedan creadas
+# y la siguiente falla con "no se pudo crear" (409) — la limpieza del final es
+# lo que lo previene; tras un corte, "docker compose restart eventstore" y ya.
 # ============================================================================
 
 API="${API:-http://localhost:5087}"
@@ -25,11 +29,11 @@ PROJ="${PROJ:-http://localhost:8090}"
 STMT="${STMT:-http://localhost:8091}"
 ESDB="${ESDB:-http://localhost:2113}"
 
-S="$(date +%H%M%S)"
-ACC_OCC="fix-occ-$S"     # demo 1: concurrencia / doble gasto
-ACC_AMNESIA="fix-amn-$S" # demo 2: estado tras restart
-ACC_IDEMP="fix-idp-$S"   # demo 3: redelivery
-ACC_DLQ="fix-dlq-$S"     # extra: evento invalido -> DLQ
+S="$(date +%H%M%S)"          # solo para nombres de grupo de replay
+ACC_OCC="901"                # demo 1: concurrencia / doble gasto
+ACC_AMNESIA="902"            # demo 2: estado tras restart
+ACC_IDEMP="900"              # demo 3: redelivery
+ACC_DLQ="903"                # extra: evento invalido -> DLQ
 
 say()  { printf '\n\033[1m=== %s ===\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }

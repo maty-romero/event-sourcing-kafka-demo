@@ -18,7 +18,7 @@ API="${API:-http://localhost:5087}"
 PROJ="${PROJ:-http://localhost:8090}"
 STMT="${STMT:-http://localhost:8091}"
 ESDB="${ESDB:-http://localhost:2113}"
-ACCOUNT="${ACCOUNT:-demo-123}"
+ACCOUNT="${ACCOUNT:-123}"
 
 post() {
   local path="$1" body="$2"

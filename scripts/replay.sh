@@ -10,7 +10,7 @@ set -euo pipefail
 # ============================================================================
 
 PROJ="${PROJ:-http://localhost:8090}"
-ACCOUNT="${ACCOUNT:-demo-123}"
+ACCOUNT="${ACCOUNT:-123}"
 
 echo "=== 1) balance ANTES de borrar (leido a la proyeccion de balances) ==="
 expected=$(curl -fsS "$PROJ/accounts/$ACCOUNT/balance" | jq -r .balance)

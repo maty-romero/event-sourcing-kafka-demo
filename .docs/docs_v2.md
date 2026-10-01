@@ -46,33 +46,33 @@ consumer group— siguen en [docs_v1.md](./docs_v1.md) y en el glosario de
                                │
                                ▼
                   ┌─────────────────────────┐
-                  │     TransactionsAPI     │  .NET: agregado Account
-                  │  load stream → fold →   │  valida invariante
-                  │  validar → append con   │  ANTES de aceptar
+                  │     TransactionsAPI     │  .NET: agregado Account 
+                  │  load stream → fold →   │  valida ANTES de aceptar
+                  │  validar → append con   │  (reglas de negocio)
                   │  expected revision (OCC)│
                   └───────────┬─────────────┘
                               ▼
                   ┌─────────────────────────┐
                   │      EventStoreDB       │  ◄── SYSTEM OF RECORD
-                  │  account-901: [0]Created│      UI: http://localhost:2113
-                  │               [1]Dep    │
-                  │               [2]Wd     │
+                  │  account-901: [0]Created│      ** UI: :2113
+                  │              [1]Deposit │
+                  │             [2]Withdrawn│
                   │  $ce-account (catch-up) │
                   │  publisher-position     │
                   └───────────┬─────────────┘
                               │  publisher (Go): lee $ce-account
-                              │  desde su posicion, publica, avanza
+                              │  desde su offset, publica y avanza
                               ▼
                   ┌─────────────────────────┐
                   │          Kafka          │  ◄── DISTRIBUCION
-                  │  account-events         │  key = accountId
-                  │  account-events.dlq     │
+                  │      account-events     │  key = accountId
                   └──────┬──────────┬───────┘
                          ▼          ▼
               ┌──────────────┐ ┌──────────────┐
-              │  balances    │ │  statement   │   Go: idempotentes,
+              │  balances    │ │  statement   |
+              |                │ (movimientos)|   Go Servicios: idempotentes,
               │  (Go, :8090) │ │  (Go, :8091) │   checkpoint propio,
-              │  +checkpoint │ │  +checkpoint │   DLQ propio
+              │  +checkpoint │ │  +checkpoint │   
               │  SQLite      │ │  SQLite      │
               └──────────────┘ └──────────────┘
 ```
